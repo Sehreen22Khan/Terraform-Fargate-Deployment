@@ -1,15 +1,71 @@
+# Provider Configuration
 provider "aws" {
-  region = var.aws_region
+  region     = var.aws_region
   access_key = var.aws_access_key_id
   secret_key = var.aws_secret_access_key
 }
 
-# Get AWS account ID
+# Data Sources
 data "aws_caller_identity" "current" {}
+data "aws_availability_zones" "available" {}
 
-# Get availability zones
-data "aws_availability_zones" "available" {
-  state = "available"
+# Variables
+variable "aws_region" {
+  default = "us-east-1"
+}
+
+variable "aws_access_key_id" {
+  type      = string
+  sensitive = false
+}
+
+variable "aws_secret_access_key" {
+  type      = string
+  sensitive = false
+}
+
+variable "ecr_repository_name" {
+  default = "todo-app-repository"
+}
+
+variable "image_tag" {
+  default = "latest"
+}
+
+variable "vpc_cidr_block" {
+  default = "10.0.0.0/16"
+}
+
+variable "public_subnet_cidr_blocks" {
+  type    = list(string)
+  default = ["10.0.1.0/24", "10.0.2.0/24"]
+}
+
+variable "container_port" {
+  default = 3000
+}
+
+variable "cpu" {
+  default = 256
+}
+
+variable "memory" {
+  default = 512
+}
+
+variable "desired_count" {
+  default = 1
+}
+
+variable "environment_variables" {
+  type = map(string)
+  default = {
+    NODE_ENV = "production"
+  }
+}
+
+variable "health_check_path" {
+  default = "/"
 }
 
 # VPC
@@ -68,7 +124,7 @@ resource "aws_route" "default_route" {
   gateway_id             = aws_internet_gateway.igw.id
 }
 
-# Security Group for Load Balancer
+# Security Groups
 resource "aws_security_group" "lb_sg" {
   name        = "${var.ecr_repository_name}-lb-sg"
   description = "Allow inbound HTTP traffic to the load balancer"
@@ -82,9 +138,9 @@ resource "aws_security_group" "lb_sg" {
   }
 
   egress {
+    protocol    = "-1"
     from_port   = 0
     to_port     = 0
-    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -93,7 +149,6 @@ resource "aws_security_group" "lb_sg" {
   }
 }
 
-# Security Group for ECS Tasks
 resource "aws_security_group" "ecs_sg" {
   name        = "${var.ecr_repository_name}-ecs-sg"
   description = "Allow inbound traffic from the load balancer"
@@ -107,9 +162,9 @@ resource "aws_security_group" "ecs_sg" {
   }
 
   egress {
+    protocol    = "-1"
     from_port   = 0
     to_port     = 0
-    protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
 
@@ -122,19 +177,16 @@ resource "aws_security_group" "ecs_sg" {
 resource "aws_iam_role" "ecs_task_execution_role" {
   name = "${var.ecr_repository_name}-ecs-task-execution-role"
 
-  assume_role_policy = data.aws_iam_policy_document.ecs_task_execution_role.json
-}
-
-data "aws_iam_policy_document" "ecs_task_execution_role" {
-  statement {
-    effect  = "Allow"
-    actions = ["sts:AssumeRole"]
-
-    principals {
-      type        = "Service"
-      identifiers = ["ecs-tasks.amazonaws.com"]
-    }
-  }
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+    }]
+  })
 }
 
 resource "aws_iam_role_policy_attachment" "ecs_task_execution_role_policy" {
@@ -147,7 +199,7 @@ resource "aws_ecs_cluster" "main" {
   name = "${var.ecr_repository_name}-cluster"
 }
 
-# Log Group
+# CloudWatch Log Group
 resource "aws_cloudwatch_log_group" "ecs_log_group" {
   name              = "/ecs/${var.ecr_repository_name}-todo-app"
   retention_in_days = 14
@@ -181,8 +233,6 @@ resource "aws_lb_target_group" "app_tg" {
     timeout             = 5
     healthy_threshold   = 5
     unhealthy_threshold = 2
-    port                = "traffic-port"
-    protocol            = "HTTP"
   }
 
   tags = {
@@ -202,58 +252,58 @@ resource "aws_lb_listener" "app_lb_listener" {
   }
 }
 
-# ECR Repository (Creates the repository if it doesn't exist)
+# ECR Repository
 resource "aws_ecr_repository" "todo_app_repo" {
   name                 = var.ecr_repository_name
   image_tag_mutability = "MUTABLE"
-
-  
 }
-
-resource "aws_ecr_lifecycle_policy" "todo_app_repo_lifecycle" {
-  repository = aws_ecr_repository.todo_app_repo.name
-
-  policy = <<EOF
-  {
-    "rules": [
-      {
-        "rulePriority": 1,
-        "description": "Expire untagged images after 30 days",
-        "selection": {
-          "tagStatus": "untagged",
-          "countType": "sinceImagePushed",
-          "countUnit": "days",
-          "countNumber": 30
-        },
-        "action": {
-          "type": "expire"
-        }
-      }
-    ]
-  }
-  EOF
-}
-
 
 # Null Resource to Build and Push Docker Image
 resource "null_resource" "docker_build_and_push" {
-  # Ensure that the ECR repository exists before running the commands
   depends_on = [aws_ecr_repository.todo_app_repo]
 
   provisioner "local-exec" {
-    command = <<EOT
-    $env:AWS_ACCESS_KEY_ID = "${var.aws_access_key_id}"
-    $env:AWS_SECRET_ACCESS_KEY = "${var.aws_secret_access_key}"
+    command = format(<<EOF
+# Capture the password from AWS ECR
+$password = aws ecr get-login-password --region %s
+Write-Host "Retrieved ECR password."
 
-    $ecrPassword = aws ecr get-login-password --region ${var.aws_region}
-    $ecrPassword | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com
-    docker build -t todo-app .
-    docker tag todo-app:latest ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_repository_name}:${var.image_tag}
-    docker push ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.aws_region}.amazonaws.com/${var.ecr_repository_name}:${var.image_tag}
-    EOT
+# Use the password explicitly in docker login
+docker login --username AWS --password $password %s.dkr.ecr.%s.amazonaws.com
+
+# Build the Docker image
+docker build -t todo-app .
+
+# Tag the Docker image
+docker tag todo-app:latest %s.dkr.ecr.%s.amazonaws.com/%s:%s
+
+# Push the Docker image to ECR
+docker push %s.dkr.ecr.%s.amazonaws.com/%s:%s
+
+Write-Host "Docker image pushed successfully!"
+EOF
+    ,
+    var.aws_region,
+    data.aws_caller_identity.current.account_id,
+    var.aws_region,
+    data.aws_caller_identity.current.account_id,
+    var.aws_region,
+    var.ecr_repository_name,
+    var.image_tag,
+    data.aws_caller_identity.current.account_id,
+    var.aws_region,
+    var.ecr_repository_name,
+    var.image_tag
+    )
+
     interpreter = ["PowerShell", "-Command"]
-}
 
+    environment = {
+      AWS_ACCESS_KEY_ID     = var.aws_access_key_id
+      AWS_SECRET_ACCESS_KEY = var.aws_secret_access_key
+      AWS_DEFAULT_REGION    = var.aws_region
+    }
+  }
 }
 
 # ECS Task Definition
@@ -273,7 +323,6 @@ resource "aws_ecs_task_definition" "app_task" {
       portMappings = [
         {
           containerPort = var.container_port
-          hostPort      = var.container_port
           protocol      = "tcp"
         }
       ]
