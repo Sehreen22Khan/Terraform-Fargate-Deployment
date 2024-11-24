@@ -1,0 +1,14 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template to create an ECR repository.
+
+Resources:
+  # ECR Repository
+  ToDoAppECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: todo-app-repository
+
+Outputs:
+  ECRRepositoryURI:
+    Description: URI of the ToDo ECR Repository
+    Value: !GetAtt ToDoAppECRRepository.RepositoryUri

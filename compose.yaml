@@ -1,0 +1,22 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+    volumes:
+      - .:/usr/src/app
+      - db_data:/usr/src/app/database  # Volume for SQLite database persistence
+    depends_on:
+      - db
+
+  db:
+    image: nouchka/sqlite3  # Lightweight image for running SQLite commands (optional)
+    volumes:
+      - db_data:/data  # Shared volume to persist database data
+
+volumes:
+  db_data:
