@@ -256,6 +256,7 @@ resource "aws_lb_listener" "app_lb_listener" {
 resource "aws_ecr_repository" "todo_app_repo" {
   name                 = var.ecr_repository_name
   image_tag_mutability = "MUTABLE"
+  force_delete         = true  # This ensures the repository and its images are deleted
 }
 
 # Null Resource to Build and Push Docker Image
@@ -308,6 +309,7 @@ EOF
 
 # ECS Task Definition
 resource "aws_ecs_task_definition" "app_task" {
+  depends_on = [null_resource.docker_build_and_push]  # Ensure image is pushed first
   family                   = "${var.ecr_repository_name}-task"
   network_mode             = "awsvpc"
   requires_compatibilities = ["FARGATE"]
