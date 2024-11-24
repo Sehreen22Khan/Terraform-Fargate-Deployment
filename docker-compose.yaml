@@ -9,14 +9,14 @@ services:
       NODE_ENV: production
     volumes:
       - .:/usr/src/app
-      - db_data:/usr/src/app/database  # Volume for SQLite database persistence
+      - /usr/src/app/node_modules
     depends_on:
       - db
 
   db:
-    image: nouchka/sqlite3  # Lightweight image for running SQLite commands (optional)
+    image: nouchka/sqlite3
     volumes:
-      - db_data:/data  # Shared volume to persist database data
+      - db_data:/data
 
 volumes:
   db_data:
