@@ -37,8 +37,11 @@ variable "vpc_cidr_block" {
 }
 
 variable "public_subnet_cidr_blocks" {
-  type    = list(string)
   default = ["10.0.1.0/24", "10.0.2.0/24"]
+}
+
+variable "private_subnet_cidr_blocks" {
+  default = ["10.0.3.0/24", "10.0.4.0/24"]
 }
 
 variable "container_port" {
@@ -98,6 +101,19 @@ resource "aws_subnet" "public" {
 
   tags = {
     Name = "${var.ecr_repository_name}-public-subnet-${count.index + 1}"
+  }
+}
+
+# Private Subnets
+resource "aws_subnet" "private" {
+  count                   = length(var.private_subnet_cidr_blocks)
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.private_subnet_cidr_blocks[count.index]
+  map_public_ip_on_launch = false
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+
+  tags = {
+    Name = "${var.ecr_repository_name}-private-subnet-${count.index + 1}"
   }
 }
 
@@ -171,6 +187,47 @@ resource "aws_security_group" "ecs_sg" {
   tags = {
     Name = "${var.ecr_repository_name}-ecs-sg"
   }
+}
+
+# NAT Gateway
+resource "aws_eip" "nat" {
+  associate_with_private_ip = true
+
+  tags = {
+    Name = "${var.ecr_repository_name}-nat-eip"
+  }
+}
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id  # NAT Gateway in the first public subnet
+
+  tags = {
+    Name = "${var.ecr_repository_name}-nat-gateway"
+  }
+}
+
+# Route Table for Private Subnets
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.ecr_repository_name}-private-rt"
+  }
+}
+
+# Route for NAT Gateway
+resource "aws_route" "private_nat_route" {
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.nat.id
+}
+
+# Associate Private Subnets with Private Route Table
+resource "aws_route_table_association" "private_subnet" {
+  count          = length(var.private_subnet_cidr_blocks)
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private.id
 }
 
 # IAM Role for ECS Task Execution
@@ -265,23 +322,11 @@ resource "null_resource" "docker_build_and_push" {
 
   provisioner "local-exec" {
     command = format(<<EOF
-# Capture the password from AWS ECR
 $password = aws ecr get-login-password --region %s
-Write-Host "Retrieved ECR password."
-
-# Use the password explicitly in docker login
 docker login --username AWS --password $password %s.dkr.ecr.%s.amazonaws.com
-
-# Build the Docker image
 docker build -t todo-app .
-
-# Tag the Docker image
 docker tag todo-app:latest %s.dkr.ecr.%s.amazonaws.com/%s:%s
-
-# Push the Docker image to ECR
 docker push %s.dkr.ecr.%s.amazonaws.com/%s:%s
-
-Write-Host "Docker image pushed successfully!"
 EOF
     ,
     var.aws_region,
@@ -355,9 +400,9 @@ resource "aws_ecs_service" "app_service" {
   desired_count   = var.desired_count
 
   network_configuration {
-    subnets         = aws_subnet.public[*].id
+    subnets         = aws_subnet.private[*].id
     security_groups = [aws_security_group.ecs_sg.id]
-    assign_public_ip = true
+    assign_public_ip = false
   }
 
   load_balancer {
