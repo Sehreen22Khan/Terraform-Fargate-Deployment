@@ -1,0 +1,58 @@
+trigger:
+- main  # Replace with the branch you want to trigger the pipeline on
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  IMAGE_NAME: 'khanregistry.azurecr.io/nodejs-app' # Replace with your ACR name
+  APP_NAME: 'Sehreen-Gazala' # Replace with your Azure App Service name
+  ACR_NAME: 'khanregistry' # Replace with your Azure Container Registry name
+  RESOURCE_GROUP: 'Sehreen-Gazala' # Replace with your Azure resource group name
+
+stages:
+- stage: Build
+  displayName: Build and Push Docker Image
+  jobs:
+  - job: BuildAndPush
+    displayName: Build and Push Docker Image
+    steps:
+    - checkout: self
+
+    - script: |
+        echo "Building the Docker image..."
+        docker build -t $(IMAGE_NAME):$(Build.BuildId) .
+      displayName: 'Build Docker Image'
+
+    - script: |
+        echo "Logging into Azure Container Registry..."
+        az acr login --name $(ACR_NAME)
+
+        echo "Pushing the Docker image..."
+        docker push $(IMAGE_NAME):$(Build.BuildId)
+      displayName: 'Push Docker Image to ACR'
+
+- stage: Deploy
+  displayName: Deploy to Azure App Service
+  dependsOn: Build
+  jobs:
+  - deployment: DeployToAppService
+    displayName: Deploy to Azure App Service
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureCLI@2
+            displayName: 'Deploy Docker Image to Azure App Service'
+            inputs:
+              azureSubscription: 'Azure subscription 1' # Replace with your service connection name
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                echo "Deploying Docker image to Azure App Service..."
+                az webapp config container set \
+                  --name $(APP_NAME) \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --docker-custom-image-name $(IMAGE_NAME):$(Build.BuildId) \
+                  --docker-registry-server-url https://$(ACR_NAME).azurecr.io
